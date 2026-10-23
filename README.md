@@ -78,6 +78,18 @@ than the working set Metal recommends for the device. Set an explicit value in S
 Rendering still keeps the GPU at 100 %, and macOS shares that GPU with the display, so expect some
 UI stutter while a clip renders; that part is not something the launcher can change.
 
+## The GPU watchdog
+
+macOS kills a GPU command buffer that runs long enough to starve the display; the render then fails with
+`Impacting Interactivity (kIOGPUCommandBufferCallbackErrorImpactingInteractivity)`. Long clips, full-size
+renders and references on slower chips reach that inside a single attention dispatch, and the MLX
+maintainers consider it OS behaviour they cannot fix. The launcher does three things about it: it caps
+FastVideo's attention chunk budget and runs one GPU op per command buffer so dispatches stay short
+(Settings), and it starts the model runner with `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`, the Apple driver
+switch that relaxes this timeout for that process. llama.cpp's Metal backend sets the same variable for
+the same reason. It is a driver switch, not a documented API, and users have reported that newer macOS
+builds sometimes still kill very long dispatches, so the chunk settings stay in place as well.
+
 ## Time estimates
 
 The time shown on the Generate button and in the picker comes from a cost model, not from a table of

@@ -77,7 +77,12 @@ costs = CostStore(DATA_DIR / ("stats-fake.json" if FAKE else "stats.json"))   # 
 
 def runner_factory(on_event):
     script = HERE / "fasth3_studio" / ("runner_fake.py" if FAKE else "runner_mlx.py")
-    env = {"PYTHONPATH": str(FASTVIDEO_DIR), "FASTVIDEO_MLX_DQ_GEMM": "1"}
+    env = {"PYTHONPATH": str(FASTVIDEO_DIR), "FASTVIDEO_MLX_DQ_GEMM": "1",
+           # macOS kills a GPU command buffer that runs long enough to starve the display
+           # (kIOGPUCommandBufferCallbackErrorImpactingInteractivity). Long clips on slower chips hit that
+           # inside one attention dispatch. This Apple driver switch relaxes the timeout for this process;
+           # llama.cpp's Metal backend sets the same variable unconditionally for the same reason.
+           "AGX_RELAX_CDM_CTXSTORE_TIMEOUT": "1"}
     ops = load_settings().get("mlx_ops_per_buffer")
     if ops:
         # Smaller command buffers keep each GPU submission short enough for macOS's watchdog.
