@@ -125,6 +125,7 @@ _add(ModelSpec(
     durations_s=(5, 10, 15),
     download_gb=70.1,
     disk_gb=17.0,
+    peak_gib=18.5,
     description="Fastest. Four-step text to video with audio, dense attention. Downloads the 70 GB BF16 "
                 "transformer and converts it to INT6 on this Mac (about 17 GB kept).",
     ref_s={"draft": 248.0, "final": 465.0},
@@ -154,6 +155,7 @@ _add(ModelSpec(
     durations_s=(5, 10, 15),
     download_gb=70.1,
     disk_gb=17.0,
+    peak_gib=20.0,
     description="Higher quality. Eight-step text to video with audio, sparse attention. Downloads the 70 GB BF16 "
                 "transformer and converts it to INT6 on this Mac (about 17 GB kept).",
     ref_s={"draft": 560.0, "final": 1000.0},
@@ -182,6 +184,7 @@ _add(ModelSpec(
     durations_s=(5, 10, 15),
     download_gb=15.4,
     disk_gb=15.4,
+    peak_gib=20.0,
     description="Quickest to set up: the only ready-made INT6 download (15 GB). Experimental pruned model, "
                 "eight steps with audio. Quality below V2.",
     ref_s={"draft": 500.0, "final": 925.0},
@@ -211,6 +214,7 @@ _add(ModelSpec(
     durations_s=(5, 10, 15),
     download_gb=70.1,
     disk_gb=17.0,
+    peak_gib=22.5,
     description="Reference to video with audio: prompt plus ordered image, video and voice references. "
                 "Downloads the 70 GB BF16 transformer and converts it to INT6 on this Mac (about 17 GB kept).",
     default_vsa_impl="auto",

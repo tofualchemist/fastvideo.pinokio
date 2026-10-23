@@ -81,6 +81,13 @@ class Stats:
                     return {**base, **v}
             return base
 
+    def peak_for(self, turn: dict) -> float | None:
+        """Largest MLX peak this machine has recorded for the model, any quality."""
+        with self.lock:
+            peaks = [v.get("peak_gib") for k, v in self.data.items() if k.startswith(turn["model"] + "|")]
+        peaks = [p for p in peaks if p]
+        return max(peaks) if peaks else None
+
     def update(self, turn: dict, result: dict) -> None:
         timings = result.get("timings_s", {})
         steps = result.get("step_times_s") or []
@@ -96,6 +103,10 @@ class Stats:
         denoise = float(timings.get("denoise_s", 0.0))
         if steps and denoise:
             new["load_s"] = max(5.0, denoise - sum(steps))
+        peaks = result.get("peak_memory_gib") or {}
+        peak = max((float(v) for v in peaks.values() if v), default=0.0)
+        if peak:
+            new["peak_gib"] = peak
         if not new:
             return
         with self.lock:
@@ -298,7 +309,7 @@ class JobQueue:
             **self.models.paths_for(spec.id, decoder=decoder),
             "prompt_cache_dir": str(self.data_dir / "prompt_cache"),
             "vae_dtype": settings.get("vae_dtype", "bf16"),
-            "metal_wired_limit_gib": settings.get("metal_wired_limit_gib", "auto"),
+            "metal_wired_limit_gib": self._wired_limit(spec, turn, settings),
             "mlx_cache_limit_gib": settings.get("mlx_cache_limit_gib", 8),
             "quant_gemm": settings.get("quant_gemm", "auto"),
             "resident": bool(settings.get("resident", False)),
@@ -330,9 +341,36 @@ class JobQueue:
             params["vsa_tile_size"] = spec.vsa_tile_size
         return self._execute(pid, tid, turn, spec, load, params, clip)
 
+    H3_WEIGHTS_GIB = 17.0   # INT6 DiT; the part of the peak that does not scale with the job
+
+    def _wired_limit(self, spec, turn: dict, settings: dict):
+        """Pin what this job needs plus headroom, not two thirds of RAM.
+
+        The lab's benchmark default (0.66 x RAM, up to 64 GiB) wires far more than a 5 s clip uses and
+        pushes every other app into swap. An explicit value in Settings wins; 'resident' mode keeps the
+        lab formula because it needs all components pinned. Untested shapes (768p, 10/15 s) scale the
+        activation part up and end at the lab ceiling, so they can never get less than before.
+        """
+        explicit = settings.get("metal_wired_limit_gib", "auto")
+        if explicit not in (None, "", "auto"):
+            return explicit
+        if settings.get("resident"):
+            return "auto"
+        from .models import machine_memory_gib
+        ram = machine_memory_gib()
+        ceiling = min(64.0, round(ram * 0.66, 1))
+        base_peak = max(float(spec.peak_gib or 20.0), float(self.stats.peak_for(turn) or 0.0))
+        activations = max(2.0, base_peak - self.H3_WEIGHTS_GIB)
+        pixel_scale = (turn["width"] * turn["height"]) / (832 * 480)
+        frame_scale = turn["num_frames"] / 124
+        wired = self.H3_WEIGHTS_GIB + activations * pixel_scale * frame_scale + 8.0
+        return round(min(ceiling, max(24.0, wired)), 1)
+
     def _execute(self, pid: str, tid: str, turn: dict, spec, load: dict, params: dict, clip: Path) -> None:
+        wired = load.get("metal_wired_limit_gib")
+        note = f"Starting runner · pinning {wired} GiB" if isinstance(wired, (int, float)) else "Starting runner"
         self.store.update_turn(pid, tid, status="running",
-                               progress={"phase": "load", "message": "Starting runner", "fraction": None,
+                               progress={"phase": "load", "message": note, "fraction": None,
                                          "steps": params["num_steps"], "step": 0})
         self._progress(pid, tid, {})
         if self.runner is None or not self.runner.alive():

@@ -67,6 +67,17 @@ Prompts: H3 responds to structured prompts. Use `(S1)` to introduce a speaker an
 `<d>[English] words</d>` for spoken lines, then describe the soundscape. FastMetal takes a plain
 visual description. "Insert template" gives you a skeleton for whichever model is selected.
 
+## Memory while rendering
+
+FastH3 pins ("wires") GPU memory so macOS cannot page the model out mid-step. The launcher pins what
+the job needs plus 8 GiB of headroom (about 28 GiB for a 5 s 480p clip on a 64 GB Mac), computed from
+the model's measured peak and the clip's size, instead of FastVideo's benchmark default of two thirds
+of RAM. That leaves the rest for your other apps. Larger canvases and longer clips scale the figure up
+toward the benchmark value. Set an explicit value in Settings to override it.
+
+Rendering still keeps the GPU at 100 %, and macOS shares that GPU with the display, so expect some
+UI stutter while a clip renders; that part is not something the launcher can change.
+
 ## Folders
 
 - `app/` the Studio server and UI (FastAPI + a single static page, no build step, works offline)
