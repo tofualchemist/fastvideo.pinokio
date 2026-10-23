@@ -290,10 +290,9 @@ class JobQueue:
     def _wired_limit(self, spec, turn: dict, settings: dict):
         """An explicit value in Settings wins; otherwise the runner applies FastVideo's recipe (two thirds of RAM).
 
-        A per-job estimate (weights + scaled activations + headroom) was tried in Oct 2026 and reverted: every
-        render it pinned less for (28-34 GiB on a 64 GB Mac) died in macOS's GPU watchdog, while the same shapes
-        rendered at the recipe value. Memory above the wired limit can be paged mid-kernel, and a paging kernel
-        runs long enough to be killed as "Impacting Interactivity".
+        A per-job estimate (weights + scaled activations + headroom, 28-34 GiB on a 64 GB Mac) was tried in
+        Oct 2026 and reverted: it is not what the lab validated, and it brought no measurable benefit. The GPU
+        watchdog failures seen at the time occur at the recipe value too, so they are not caused by the limit.
         """
         explicit = settings.get("metal_wired_limit_gib", "auto")
         if explicit not in (None, "", "auto"):
