@@ -1,0 +1,17 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "links": [{
+    "title": "Hao AI Lab (FastVideo / FastH3)",
+    "links": [{
+      "title": "FastVideo on GitHub",
+      "value": "https://github.com/hao-ai-lab/FastVideo"
+    }, {
+      "title": "FastH3 models on Hugging Face",
+      "value": "https://huggingface.co/FastVideo"
+    }, {
+      "title": "FastH3 on Apple Silicon (blog)",
+      "value": "https://haoailab.com/blogs/fasth3-local/"
+    }]
+  }]
+}

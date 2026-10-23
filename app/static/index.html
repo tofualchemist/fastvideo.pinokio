@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FastVideo MLX</title>
+<link rel="stylesheet" href="/static/app.css">
+<script>try{const t=localStorage.getItem("fasth3.theme");if(t&&t!=="system")document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+</head>
+<body>
+<div id="app" class="app">
+  <aside class="side" id="side">
+    <div class="side-head">
+      <span class="side-title">Projects</span>
+      <button class="icon-btn" id="collapse-side" title="Collapse sidebar" aria-label="Collapse sidebar">&#x2039;</button>
+    </div>
+    <button class="proj new" id="new-project">+ New project</button>
+    <div class="side-list" id="project-list"></div>
+    <div class="side-foot">
+      <span><i class="dot run"></i> rendering</span>
+      <span><i class="dot new"></i> new result</span>
+    </div>
+  </aside>
+  <button class="icon-btn side-open" id="open-side" title="Show projects" aria-label="Show projects" hidden>&#x203A;</button>
+
+  <main class="main">
+    <header class="bar">
+      <div class="bar-left">
+        <span class="title" id="project-title" contenteditable="true" spellcheck="false">FastVideo MLX</span>
+        <span class="meta" id="queue-meta"></span>
+      </div>
+      <div class="bar-right">
+        <span class="chip ghost" id="runner-chip" title="Current job"></span>
+        <button class="icon-btn" id="theme-toggle" title="Theme" aria-label="Toggle theme">◐</button>
+        <button class="icon-btn" id="open-settings" title="Settings" aria-label="Settings">&#9881;</button>
+      </div>
+    </header>
+
+    <section class="timeline" id="timeline">
+      <div class="empty" id="empty-state">
+        <h2>Start a project</h2>
+        <p>Create a project in the sidebar, write a prompt, and generate a draft. Every result stays in the timeline with its prompt and seed, so you can reroll, edit, or finalize it.</p>
+      </div>
+    </section>
+
+    <section class="composer" id="composer">
+      <div class="composer-head">
+        <span class="meta" id="composer-from">New turn</span>
+        <span class="composer-tools">
+          <button class="link" id="insert-template">Insert template</button>
+          <button class="link" id="clear-composer">Clear</button>
+        </span>
+      </div>
+      <textarea id="prompt" rows="4" placeholder="Describe the shot. Subject, action, camera, lighting. Add dialogue as (S1) ... &lt;d&gt;[English] words&lt;/d&gt; and finish with the soundscape."></textarea>
+      <div class="refs-row" id="refs-row">
+        <div class="ref-chips" id="ref-chips"></div>
+        <label class="chip dashed" id="add-ref-label"><input type="file" id="ref-file" multiple accept="image/*,video/*,audio/*" hidden>+ Add reference</label>
+        <span class="meta" id="refs-hint">image · video · voice</span>
+      </div>
+      <div class="composer-row">
+        <div class="chips">
+          <button class="chip model-chip" id="model-chip" title="Choose a model"><span id="model-chip-label">Model</span> ▾</button>
+          <select class="chip" id="duration-select" title="Duration"></select>
+          <select class="chip" id="quality-select" title="Quality">
+            <option value="draft">Draft</option>
+            <option value="final">Final</option>
+          </select>
+          <span class="chip seed" title="Seed. Locked: reuse this seed for the next turn.">
+            <button class="lock" id="seed-lock" aria-label="Toggle seed lock">&#128274;</button>
+            <input id="seed" type="text" inputmode="numeric" placeholder="random">
+          </span>
+          <button class="chip ghost" id="toggle-advanced">Advanced</button>
+        </div>
+        <button class="primary" id="generate">Generate</button>
+      </div>
+      <div class="advanced" id="advanced" hidden>
+        <label>Canvas
+          <select id="canvas-select"><option value="480p">480p</option><option value="720p">720p · 1280×704 (Wan)</option><option value="768p">768p · 1344×768 (H3, slow)</option></select>
+        </label>
+        <label>Draft mode
+          <select id="draft-mode"><option value="fast">temporal (fewer frames)</option><option value="spatial">spatial (smaller canvas)</option><option value="both">both</option><option value="none">none (8-layer decoder only)</option></select>
+        </label>
+        <label>Attention kernel
+          <select id="vsa-impl"><option value="">model default</option><option value="reference">reference (safe)</option><option value="simd">simd (faster, experimental)</option><option value="auto">auto</option></select>
+        </label>
+        <label id="wan-vae-label" hidden>Final decode
+          <select id="wan-vae"><option value="">fast decoder (TAEHV)</option><option value="1">full Wan VAE (+~6 min, best fidelity)</option></select>
+        </label>
+        <span class="meta" id="model-hint"></span>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="picker" hidden>
+    <div class="modal-card picker-card">
+      <div class="picker-head">
+        <span id="picker-machine" class="meta"></span>
+        <span class="meta" id="picker-note"></span>
+        <button class="icon-btn close" data-close aria-label="Close">&#x2715;</button>
+      </div>
+      <div id="picker-list"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="settings-modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head"><h2>Settings</h2><button class="icon-btn close" data-close aria-label="Close">&#x2715;</button></div>
+      <form id="settings-form" class="settings">
+        <label>Default model <select name="default_model" id="settings-model"></select></label>
+        <label>Wired memory limit (GiB) <input name="metal_wired_limit_gib" placeholder="auto"></label>
+        <label>MLX cache limit (GiB) <input name="mlx_cache_limit_gib" type="number" min="-1" step="1"></label>
+        <label>VAE dtype <select name="vae_dtype"><option>bf16</option><option>fp16</option><option>fp32</option></select></label>
+        <label>Quantized matmul <select name="quant_gemm"><option>auto</option><option>dequant</option><option>qmm</option></select></label>
+        <label>Cooldown between steps (s) <input name="cooldown_s" type="number" min="0" step="0.5"></label>
+        <label>Attention chunk budget (MiB, lower = shorter GPU kernels; 0 = FastVideo default) <input name="attention_chunk_mib" type="number" min="0" step="32"></label>
+        <label>MLX ops per command buffer (lower = shorter GPU submissions) <input name="mlx_ops_per_buffer" type="number" min="1" step="1"></label>
+        <label class="row"><input name="resident" type="checkbox"> Keep all components resident (needs ~40 GB free)</label>
+        <label class="row"><input name="notifications" type="checkbox"> Desktop notifications when a clip is ready</label>
+        <label class="row"><input name="previews" type="checkbox"> Live previews while rendering (TAEH3, adds a few seconds per step)</label>
+        <div class="settings-actions"><button type="submit" class="primary">Save</button></div>
+      </form>
+      <details class="log"><summary>Runner log</summary><pre id="log"></pre></details>
+    </div>
+  </div>
+  <div class="modal viewer" id="viewer" hidden>
+    <div class="viewer-card">
+      <div class="viewer-head">
+        <span class="meta" id="viewer-title"></span>
+        <span class="viewer-nav">
+          <button class="icon-btn" id="viewer-prev" title="Previous (←)" aria-label="Previous">&#x2190;</button>
+          <button class="icon-btn" id="viewer-next" title="Next (→)" aria-label="Next">&#x2192;</button>
+          <a class="icon-btn" id="viewer-download" title="Download" aria-label="Download" download>&#x2913;</a>
+          <button class="icon-btn close" data-close aria-label="Close">&#x2715;</button>
+        </span>
+      </div>
+      <video id="viewer-video" controls loop playsinline></video>
+      <p class="prompt" id="viewer-prompt"></p>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
