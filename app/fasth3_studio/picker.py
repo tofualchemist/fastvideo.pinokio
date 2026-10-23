@@ -42,9 +42,9 @@ def table_factor(chip: str) -> float | None:
 
 
 def measured_total(stats: Stats, model_id: str, quality: str, refs: bool) -> float | None:
-    """End-to-end seconds learned on this machine for (model, quality), or None."""
-    turn = {"model": model_id, "quality": quality, "refs": [1] if refs else []}
-    if stats.key(turn) not in stats.data:
+    """End-to-end seconds learned on this machine for a 5 s 480p clip of (model, quality), or None."""
+    turn = {"model": model_id, "quality": quality, "refs": [1] if refs else [], "duration_s": 5, "canvas": "480p"}
+    if not stats.has_measurement(turn):
         return None
     est = stats.estimate(turn)
     steps = registry.MODELS[model_id].steps
@@ -113,9 +113,9 @@ def build(models: ModelManager, stats: Stats, *, quality: str, need: str) -> dic
         return True
 
     candidates = [r for r in rows if ok(r)]
-    candidates.sort(key=lambda r: (0 if r["installed"] else 1, r["est_s"]["draft"]))
+    candidates.sort(key=lambda r: r["est_s"]["draft"])   # fastest fit for the need, installed or not
     recommended = candidates[0]["id"] if candidates else None
-    tag = {"refs": "Needed for references", "audio": "Recommended for audio"}.get(need, "Recommended for quick drafts")
+    tag = {"refs": "Needed for references", "audio": "Fastest with audio"}.get(need, "Fastest for drafts")
     return {
         "machine": {"chip": chip, "memory_gib": memory, "free_disk_gb": free_disk, "factor": round(factor, 2),
                     "factor_source": factor_source},

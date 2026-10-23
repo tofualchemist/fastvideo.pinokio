@@ -143,16 +143,26 @@ async def api_put_settings(request: Request):
     return merged
 
 
+LENGTH_FACTOR = {5: 1.0, 10: 3.0, 15: 6.0}   # attention cost grows faster than frame count; rough
+
+
 @app.get("/api/estimate")
-def api_estimate(model: str, quality: str = "draft", refs: int = 0):
+def api_estimate(model: str, quality: str = "draft", refs: int = 0, duration: int = 5, canvas: str = "480p"):
     if model not in registry.MODELS:
         raise HTTPException(404, "unknown model")
     spec = registry.MODELS[model]
-    turn = {"model": model, "quality": quality, "refs": [1] if refs else []}
-    est = stats.estimate(turn)
+    turn = {"model": model, "quality": quality, "refs": [1] if refs else [], "duration_s": duration, "canvas": canvas}
+    if stats.has_measurement(turn):
+        est = stats.estimate(turn)
+        total = est["load_s"] + est["condition_s"] + est["step_s"] * spec.steps + est["decode_s"]
+        return {"total_s": round(total), "learned": True, "steps": spec.steps}
+    base = {**turn, "duration_s": 5, "canvas": "480p"}
+    est = stats.estimate(base)
     total = est["load_s"] + est["condition_s"] + est["step_s"] * spec.steps + est["decode_s"]
-    learned = stats.key(turn) in stats.data
-    return {"total_s": round(total), "learned": learned, "steps": spec.steps}
+    w, h = spec.canvases.get(canvas, next(iter(spec.canvases.values())))
+    w0, h0 = next(iter(spec.canvases.values()))
+    total *= LENGTH_FACTOR.get(int(duration), 1.0) * max(1.0, (w * h) / (w0 * h0)) ** 1.5
+    return {"total_s": round(total), "learned": False, "steps": spec.steps}
 
 
 @app.get("/api/picker")

@@ -67,7 +67,14 @@ class Stats:
 
     @staticmethod
     def key(turn: dict) -> str:
-        return f"{turn['model']}|{turn.get('quality', 'final')}|{'refs' if turn.get('refs') else 'text'}"
+        # Clip length and canvas change the cost several-fold, so they are part of the key. Entries written
+        # before this (3 parts) are ignored: they may have come from a 15 s run and would mislead.
+        return (f"{turn['model']}|{turn.get('quality', 'final')}|{'refs' if turn.get('refs') else 'text'}"
+                f"|{int(turn.get('duration_s') or 5)}s|{turn.get('canvas') or '480p'}")
+
+    @staticmethod
+    def is_current_key(key: str) -> bool:
+        return key.count("|") == 4
 
     def estimate(self, turn: dict) -> dict:
         base = self.default_for(turn["model"])
@@ -75,16 +82,22 @@ class Stats:
             entry = self.data.get(self.key(turn))
             if entry:
                 return {**base, **entry}
-            # Fall back to any entry for the same model.
+            # Fall back to a 5 s 480p entry for the same model and quality, if any; the caller scales it.
+            same = f"{turn['model']}|{turn.get('quality', 'final')}|"
             for k, v in self.data.items():
-                if k.startswith(turn["model"] + "|"):
+                if self.is_current_key(k) and k.startswith(same) and k.endswith("|5s|480p"):
                     return {**base, **v}
             return base
+
+    def has_measurement(self, turn: dict) -> bool:
+        with self.lock:
+            return self.key(turn) in self.data
 
     def peak_for(self, turn: dict) -> float | None:
         """Largest MLX peak this machine has recorded for the model, any quality."""
         with self.lock:
-            peaks = [v.get("peak_gib") for k, v in self.data.items() if k.startswith(turn["model"] + "|")]
+            peaks = [v.get("peak_gib") for k, v in self.data.items()
+                     if self.is_current_key(k) and k.startswith(turn["model"] + "|")]
         peaks = [p for p in peaks if p]
         return max(peaks) if peaks else None
 

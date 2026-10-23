@@ -403,12 +403,9 @@ Soundscape: [ambient sound], [effects], [music if any].`;
     clearTimeout(estTimer);
     estTimer = setTimeout(async () => {
       try {
-        const e = await api("GET", `/api/estimate?model=${c.model}&quality=${c.quality}&refs=${c.refs.length ? 1 : 0}`);
-        // Longer clips cost more than linearly (attention grows with the square of the frame count): 10 s ≈ 3x, 15 s ≈ 6x a 5 s clip.
-        const lengthFactor = { 5: 1, 10: 3, 15: 6 }[Number(c.duration)] || 1;
-        const total = e.total_s * lengthFactor;
-        btn.textContent = `Generate · ${fmtEta(total)}${e.learned && lengthFactor === 1 ? "" : " (guess)"}`;
-        $("#model-chip-label").textContent = `${spec.name}${spec.audio === false ? " · silent" : ""} · ${fmtEta(total)}`;
+        const e = await api("GET", `/api/estimate?model=${c.model}&quality=${c.quality}&refs=${c.refs.length ? 1 : 0}&duration=${Number(c.duration)}&canvas=${c.canvas}`);
+        btn.textContent = `Generate · ${fmtEta(e.total_s)}${e.learned ? "" : " (guess)"}`;
+        $("#model-chip-label").textContent = `${spec.name}${spec.audio === false ? " · silent" : ""} · ${fmtEta(e.total_s)}`;
       } catch (_) { /* ignore */ }
     }, 150);
   }
@@ -612,7 +609,7 @@ Soundscape: [ambient sound], [effects], [music if any].`;
     $("#seed").addEventListener("input", (e) => { state.composer.seed = e.target.value.replace(/\D/g, ""); e.target.value = state.composer.seed; if (state.composer.seed) { state.composer.locked = true; $(".chip.seed").classList.add("locked"); } });
     $("#seed-lock").onclick = () => { const c = state.composer; c.locked = !c.locked; if (!c.locked) c.seed = ""; renderComposer(); };
     $("#toggle-advanced").onclick = () => { const a = $("#advanced"); a.hidden = !a.hidden; };
-    $("#canvas-select").onchange = (e) => (state.composer.canvas = e.target.value);
+    $("#canvas-select").onchange = (e) => { state.composer.canvas = e.target.value; renderGenerateButton(); };
     $("#draft-mode").onchange = (e) => (state.composer.draftMode = e.target.value);
     $("#vsa-impl").onchange = (e) => (state.composer.vsaImpl = e.target.value);
     $("#wan-vae").onchange = (e) => (state.composer.wanVae = e.target.value === "1");
