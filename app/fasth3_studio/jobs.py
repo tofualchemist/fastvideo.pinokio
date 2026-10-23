@@ -358,7 +358,8 @@ class JobQueue:
             return "auto"
         from .models import machine_memory_gib
         ram = machine_memory_gib()
-        ceiling = min(64.0, round(ram * 0.66, 1))
+        # Three quarters of RAM, capped at 64: on a 36 GB Mac that is 27 GiB, the lab's own recipe value.
+        ceiling = min(64.0, round(ram * 0.75, 1))
         base_peak = max(float(spec.peak_gib or 20.0), float(self.stats.peak_for(turn) or 0.0))
         activations = max(2.0, base_peak - self.H3_WEIGHTS_GIB)
         pixel_scale = (turn["width"] * turn["height"]) / (832 * 480)
