@@ -7,6 +7,7 @@ import os
 import random
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -19,7 +20,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from fasth3_studio import registry  # noqa: E402
-from fasth3_studio.jobs import CANVAS, FRAMES_FOR_SECONDS, EventBus, JobQueue, Stats  # noqa: E402
+from fasth3_studio.costmodel import CostStore, estimate  # noqa: E402
+from fasth3_studio.jobs import CANVAS, FRAMES_FOR_SECONDS, EventBus, JobQueue  # noqa: E402
 from fasth3_studio.models import ModelManager  # noqa: E402
 from fasth3_studio.projects import ACTIVE, ProjectStore  # noqa: E402
 from fasth3_studio.runner import Runner  # noqa: E402
@@ -70,7 +72,7 @@ def save_settings(values: dict) -> dict:
 bus = EventBus()
 store = ProjectStore(DATA_DIR)
 models = ModelManager(MODELS_DIR, FASTVIDEO_DIR, fake=FAKE)
-stats = Stats(DATA_DIR / "stats.json")
+costs = CostStore(DATA_DIR / ("stats-fake.json" if FAKE else "stats.json"))   # fake runs must not calibrate real ones
 
 
 def runner_factory(on_event):
@@ -83,7 +85,23 @@ def runner_factory(on_event):
     return Runner(script, on_event=on_event, log_path=DATA_DIR / "logs" / "runner.log", env=env)
 
 
-jobs = JobQueue(store, models, bus, stats, DATA_DIR, runner_factory, load_settings)
+jobs = JobQueue(store, models, bus, costs, DATA_DIR, runner_factory, load_settings)
+
+
+def benchmark_if_needed() -> None:
+    """The cost model needs one machine constant before the first run; install.js measures it, this is the fallback."""
+    if FAKE or costs.has_benchmark() or costs.samples():
+        return
+
+    def run() -> None:
+        try:
+            import bench
+            costs.set_benchmark(bench.measure_tflops(), bench.chip_name())
+            bus.publish({"type": "models"})
+        except Exception as exc:  # noqa: BLE001
+            print(f"GPU benchmark skipped: {exc}")
+
+    threading.Thread(target=run, daemon=True, name="gpu-bench").start()
 app = FastAPI(title="FastVideo MLX")
 
 
@@ -143,32 +161,26 @@ async def api_put_settings(request: Request):
     return merged
 
 
-LENGTH_FACTOR = {5: 1.0, 10: 3.0, 15: 6.0}   # attention cost grows faster than frame count; rough
-
-
 @app.get("/api/estimate")
-def api_estimate(model: str, quality: str = "draft", refs: int = 0, duration: int = 5, canvas: str = "480p"):
+def api_estimate(model: str, quality: str = "draft", refs: int = 0, ref_clips: int = 0, duration: int = 5,
+                 canvas: str = "480p", fast: int = 1, fast_spatial: int = 0):
     if model not in registry.MODELS:
         raise HTTPException(404, "unknown model")
     spec = registry.MODELS[model]
-    turn = {"model": model, "quality": quality, "refs": [1] if refs else [], "duration_s": duration, "canvas": canvas}
-    if stats.has_measurement(turn):
-        est = stats.estimate(turn)
-        total = est["load_s"] + est["condition_s"] + est["step_s"] * spec.steps + est["decode_s"]
-        return {"total_s": round(total), "learned": True, "steps": spec.steps}
-    base = {**turn, "duration_s": 5, "canvas": "480p"}
-    est = stats.estimate(base)
-    total = est["load_s"] + est["condition_s"] + est["step_s"] * spec.steps + est["decode_s"]
-    w, h = spec.canvases.get(canvas, next(iter(spec.canvases.values())))
-    w0, h0 = next(iter(spec.canvases.values()))
-    total *= LENGTH_FACTOR.get(int(duration), 1.0) * max(1.0, (w * h) / (w0 * h0)) ** 1.5
-    return {"total_s": round(total), "learned": False, "steps": spec.steps}
+    width, height = spec.canvases.get(canvas, next(iter(spec.canvases.values())))
+    frames = spec.frames_for_seconds.get(int(duration), next(iter(spec.frames_for_seconds.values())))
+    est = estimate(costs, spec, quality=quality, frames=frames, width=width, height=height, refs=refs,
+                   ref_clips=ref_clips, fast=bool(fast and quality == "draft" and spec.supports_fast_modes and not refs),
+                   fast_spatial=bool(fast_spatial and quality == "draft" and spec.supports_fast_modes),
+                   cooldown_s=float(load_settings().get("cooldown_s") or 0.0))
+    return {**est, "steps": spec.steps}
 
 
 @app.get("/api/picker")
 def api_picker(quality: str = "draft", need: str = "any"):
     from fasth3_studio import picker
-    return picker.build(models, stats, quality=quality, need=need if need in ("any", "audio", "silent", "refs") else "any")
+    return picker.build(models, costs, quality=quality, need=need if need in ("any", "audio", "silent", "refs") else "any",
+                        cooldown_s=float(load_settings().get("cooldown_s") or 0.0))
 
 
 @app.get("/api/log")
@@ -420,6 +432,7 @@ def main() -> None:
     port = int(os.environ.get("FASTH3_STUDIO_PORT") or free_port())
     app.state.port = port
     jobs.start()
+    benchmark_if_needed()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

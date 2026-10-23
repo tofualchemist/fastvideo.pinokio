@@ -1,7 +1,6 @@
 """Job queue: one worker thread turns queued turns into clips, installing models on demand."""
 from __future__ import annotations
 
-import json
 import os
 import queue
 import threading
@@ -12,6 +11,7 @@ from pathlib import Path
 
 from . import registry
 from .models import Cancelled, InstallError, ModelManager
+from .costmodel import CostStore, estimate, sample_from_result
 from .projects import ProjectStore
 from .runner import Runner, RunnerError
 
@@ -46,99 +46,14 @@ class EventBus:
                 pass
 
 
-class Stats:
-    """Learned per-configuration timings for the time estimates on pending cards."""
-
-    DEFAULT = {"load_s": 60.0, "condition_s": 40.0, "step_s": 120.0, "decode_s": 60.0}
-    DEFAULT_WAN = {"load_s": 20.0, "condition_s": 45.0, "step_s": 70.0, "decode_s": 45.0}
-
-    @classmethod
-    def default_for(cls, model_id: str) -> dict:
-        spec = registry.MODELS.get(model_id)
-        return dict(cls.DEFAULT_WAN if spec is not None and spec.engine == "wan" else cls.DEFAULT)
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.lock = threading.Lock()
-        try:
-            self.data = json.loads(path.read_text()) if path.exists() else {}
-        except json.JSONDecodeError:
-            self.data = {}
-
-    @staticmethod
-    def key(turn: dict) -> str:
-        # Clip length and canvas change the cost several-fold, so they are part of the key. Entries written
-        # before this (3 parts) are ignored: they may have come from a 15 s run and would mislead.
-        return (f"{turn['model']}|{turn.get('quality', 'final')}|{'refs' if turn.get('refs') else 'text'}"
-                f"|{int(turn.get('duration_s') or 5)}s|{turn.get('canvas') or '480p'}")
-
-    @staticmethod
-    def is_current_key(key: str) -> bool:
-        return key.count("|") == 4
-
-    def estimate(self, turn: dict) -> dict:
-        base = self.default_for(turn["model"])
-        with self.lock:
-            entry = self.data.get(self.key(turn))
-            if entry:
-                return {**base, **entry}
-            # Fall back to a 5 s 480p entry for the same model and quality, if any; the caller scales it.
-            same = f"{turn['model']}|{turn.get('quality', 'final')}|"
-            for k, v in self.data.items():
-                if self.is_current_key(k) and k.startswith(same) and k.endswith("|5s|480p"):
-                    return {**base, **v}
-            return base
-
-    def has_measurement(self, turn: dict) -> bool:
-        with self.lock:
-            return self.key(turn) in self.data
-
-    def peak_for(self, turn: dict) -> float | None:
-        """Largest MLX peak this machine has recorded for the model, any quality."""
-        with self.lock:
-            peaks = [v.get("peak_gib") for k, v in self.data.items()
-                     if self.is_current_key(k) and k.startswith(turn["model"] + "|")]
-        peaks = [p for p in peaks if p]
-        return max(peaks) if peaks else None
-
-    def update(self, turn: dict, result: dict) -> None:
-        timings = result.get("timings_s", {})
-        steps = result.get("step_times_s") or []
-        new = {}
-        if steps:
-            new["step_s"] = sum(steps) / len(steps)
-        if "condition_s" in timings:
-            new["condition_s"] = float(timings["condition_s"])
-        decode = sum(float(timings.get(k, 0.0)) for k in ("video_decode_s", "audio_decode_s", "mux_s", "rife_s",
-                                                           "spatial_upsample_s"))
-        if decode:
-            new["decode_s"] = decode
-        denoise = float(timings.get("denoise_s", 0.0))
-        if steps and denoise:
-            new["load_s"] = max(5.0, denoise - sum(steps))
-        peaks = result.get("peak_memory_gib") or {}
-        peak = max((float(v) for v in peaks.values() if v), default=0.0)
-        if peak:
-            new["peak_gib"] = peak
-        if not new:
-            return
-        with self.lock:
-            key = self.key(turn)
-            old = self.data.get(key, {})
-            merged = {k: (0.5 * old[k] + 0.5 * v) if k in old else v for k, v in new.items()}
-            self.data[key] = {**old, **merged}
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.data, indent=1))
-
-
 class JobQueue:
 
-    def __init__(self, store: ProjectStore, models: ModelManager, bus: EventBus, stats: Stats, data_dir: Path,
+    def __init__(self, store: ProjectStore, models: ModelManager, bus: EventBus, costs: CostStore, data_dir: Path,
                  runner_factory: Callable[[Callable[[dict], None]], Runner], settings: Callable[[], dict]):
         self.store = store
         self.models = models
         self.bus = bus
-        self.stats = stats
+        self.costs = costs
         self.data_dir = Path(data_dir)
         self.settings = settings
         self._runner_factory = runner_factory
@@ -257,13 +172,30 @@ class JobQueue:
         self._publish_turn(pid, tid)
 
     def _eta(self, turn: dict, progress: dict) -> float | None:
-        est = self.stats.estimate(turn)
-        steps = int(progress.get("steps") or turn.get("num_steps") or 0)
-        step = int(progress.get("step") or 0)
-        step_s = progress.get("step_s") or est["step_s"]
         phase = progress.get("phase")
         if phase in ("download", "convert"):
             return None
+        try:
+            return self._eta_seconds(turn, progress, phase)
+        except Exception:  # noqa: BLE001  - an estimate must never take the runner's reader thread down
+            return None
+
+    def _eta_seconds(self, turn: dict, progress: dict, phase: str | None) -> float | None:
+        settings = self.settings()
+        spec = registry.MODELS[turn["model"]]
+        est = estimate(self.costs, spec, quality=turn.get("quality", "final"), frames=turn["num_frames"],
+                       width=turn["width"], height=turn["height"], refs=len(turn.get("refs") or []),
+                       ref_clips=sum(1 for r in turn.get("refs") or [] if r.get("media_type") == "video"),
+                       fast=bool(turn.get("fast")), fast_spatial=bool(turn.get("fast_spatial")),
+                       decoder=turn.get("decoder"), cooldown_s=float(settings.get("cooldown_s") or 0.0),
+                       breakdown=True)
+        if est["total_s"] is None:
+            return None
+        est = est["phases"]
+        steps = int(progress.get("steps") or turn.get("num_steps") or est.get("steps") or 0)
+        step = int(progress.get("step") or 0)
+        step_s = progress.get("step_s") or est["step_s"]
+        est["decode_s"] = est["decode_s"] + est.get("rife_s", 0.0)
         remaining = 0.0
         order = ["load", "condition", "denoise", "decode", "mux"]
         if phase not in order:
@@ -274,7 +206,7 @@ class JobQueue:
         if idx <= 1:
             remaining += est["condition_s"]
         if idx <= 2:
-            remaining += max(0, steps - step) * step_s
+            remaining += max(0, steps - step) * (step_s + est.get("cooldown_s", 0.0))
         if idx <= 3:
             remaining += est["decode_s"]
         return round(remaining)
@@ -373,7 +305,7 @@ class JobQueue:
         ram = machine_memory_gib()
         # Three quarters of RAM, capped at 64: on a 36 GB Mac that is 27 GiB, the lab's own recipe value.
         ceiling = min(64.0, round(ram * 0.75, 1))
-        base_peak = max(float(spec.peak_gib or 20.0), float(self.stats.peak_for(turn) or 0.0))
+        base_peak = max(float(spec.peak_gib or 20.0), float(self.costs.peak_for(spec.id) or 0.0))
         activations = max(2.0, base_peak - self.H3_WEIGHTS_GIB)
         pixel_scale = (turn["width"] * turn["height"]) / (832 * 480)
         frame_scale = turn["num_frames"] / 124
@@ -390,6 +322,7 @@ class JobQueue:
         if self.runner is None or not self.runner.alive():
             self.runner = self._runner_factory(self._on_runner_event)
         self._active_turn = (pid, tid)
+        self._job_meta = {}
         try:
             result = self.runner.generate(tid, load, params)
         except RunnerError as exc:
@@ -412,7 +345,9 @@ class JobQueue:
                                    finished_at=time.time())
             self._publish_turn(pid, tid)
             return
-        self.stats.update(turn, result)
+        sample = sample_from_result(turn, spec, result, self._job_meta, self.settings())
+        if sample:
+            self.costs.record(sample)
         preview_file = clip.with_suffix(".preview.jpg")
         if preview_file.exists():
             preview_file.unlink()
@@ -427,6 +362,7 @@ class JobQueue:
                           "title": "Clip ready", "body": turn["prompt"][:80]})
 
     _active_turn: tuple[str, str] | None = None
+    _job_meta: dict = {}
 
     def _on_runner_event(self, event: dict) -> None:
         kind = event.get("event")
@@ -435,6 +371,8 @@ class JobQueue:
             self.log_lines.append(line)
             self.log_lines = self.log_lines[-400:]
             self.bus.publish({"type": "log", "line": line})
+        elif kind == "meta" and self._active_turn:
+            self._job_meta.update({k: v for k, v in event.items() if k != "event"})
         elif kind == "preview" and self._active_turn:
             pid, tid = self._active_turn
             try:

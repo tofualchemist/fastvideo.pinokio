@@ -34,8 +34,9 @@ contain only a manifest (the weights file is missing as of October 2026), which 
 - On an M1 Max, FastH3 Omni needs the default watchdog settings plus a step cooldown (Settings) and works with image
   references; video-clip references did not survive macOS's GPU watchdog on that chip
 - Disk: 35 GB for the default model (Trim); V1, V2 and Omni need about 95 GB free while converting
-- Expect minutes per clip, not seconds. A 5 s 480p clip takes roughly 8 minutes on an M4 Max with V1;
-  older chips are slower. Draft mode is the default and roughly halves that.
+- Expect minutes per clip, not seconds. On an M1 Max a 5 s 480p draft takes about 8 minutes with V1 and
+  17 with V2 or Trim; a final roughly doubles that. The picker shows the estimate for this Mac (see
+  "Time estimates" below). Draft mode is the default.
 
 ## How to use
 
@@ -44,8 +45,8 @@ contain only a manifest (the weights file is missing as of October 2026), which 
 3. Create a project, write a prompt, and **Generate**. The first run downloads the shared
    components and the selected model, with progress on the card. The model chip in the composer
    opens a picker that shows, for every model, what it makes, whether it fits this Mac, how long a
-   draft and a final take here (measured once you have run it), peak memory, and download size. It
-   also lets you download a model ahead of time or remove one from disk.
+   draft and a final take here (estimated for this Mac, measured once you have run that shape), peak
+   memory, and download size. It also lets you download a model ahead of time or remove one from disk.
 4. Iterate from the timeline:
    - **Reroll**: same prompt and settings, new seed.
    - **Edit**: loads that turn into the composer; change anything and generate again. The seed stays
@@ -78,6 +79,25 @@ toward the benchmark value. Set an explicit value in Settings to override it.
 Rendering still keeps the GPU at 100 %, and macOS shares that GPU with the display, so expect some
 UI stutter while a clip renders; that part is not something the launcher can change.
 
+## Time estimates
+
+The time shown on the Generate button and in the picker comes from a cost model, not from a table of
+chips. Each denoise step costs `s × (linear FLOPs + R × attention FLOPs)`: the two FLOP counts follow
+from the model's architecture and the number of tokens in the sequence (which the launcher computes
+from frames, canvas and references exactly as the runtime does), `R` is how much more an attention FLOP
+costs than a matmul FLOP on this GPU, and `s` is this Mac's seconds per matmul FLOP. Before the first run
+`s` comes from a 15-second GPU micro-benchmark that Install runs (`app/bench.py`; Start runs it if it is
+missing). Every finished render records its token count, step times and phase times in `data/stats.json`,
+and from then on `s` (and `R`, once runs at different lengths exist) are fitted from those runs. Load,
+prompt encoding, decoding and frame interpolation are recorded per model and scaled by what they depend on.
+Changing the clip length, canvas or references changes the token count, so the estimate follows without
+any per-length factors. "measured" means this exact shape has run here; everything else says "est.".
+
+On the M1 Max that built this launcher, the benchmark-only step estimate was within 5 % of the actual
+step time for six of nine recorded FastH3 runs; the other three were early Trim drafts that ran 20 to
+100 % slower than a later run of the identical shape, so the model uses medians and such runs do not
+move the fit.
+
 ## Folders
 
 - `app/` the Studio server and UI (FastAPI + a single static page, no build step, works offline)
@@ -86,6 +106,7 @@ UI stutter while a clip renders; that part is not something the launcher can cha
 - `models/` downloaded and converted weights
 - `data/projects/<id>/` each project's `project.json`, `clips/` and `refs/`
 - `data/logs/runner.log` the model runtime's log
+- `data/stats.json` this Mac's GPU benchmark and the recorded runs the time estimates are fitted from
 
 ## API
 

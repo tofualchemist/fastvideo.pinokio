@@ -17,6 +17,8 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from .costmodel import meta_from_log_line
+
 Event = dict
 
 STEP_RE = re.compile(r"H3 denoise step (\d+)/(\d+).*? in ([\d.]+)s")
@@ -147,6 +149,11 @@ class Runner:
             except json.JSONDecodeError:
                 event = {"event": "log", "message": line}
             self.on_event(event)
+            if event.get("event") == "log":
+                # Child-process output the runner relays (the FastMetal scripts) carries shape facts too.
+                meta = meta_from_log_line(event.get("message", ""))
+                if meta:
+                    self.on_event({"event": "meta", **meta})
             if event.get("event") in ("ready", "pong", "done", "error", "exit"):
                 self._events.put(event)
         code = proc.wait()
@@ -170,6 +177,9 @@ class Runner:
                 progress = progress_from_log_line(line)
                 if progress:
                     self.on_event(progress)
+                meta = meta_from_log_line(line)
+                if meta:
+                    self.on_event({"event": "meta", **meta})
         finally:
             if log:
                 log.close()

@@ -41,6 +41,19 @@ module.exports = {
       }
     },
     {
+      method: "shell.run",
+      params: {
+        venv: "../env",
+        path: "app",
+        env: {
+          FASTH3_STUDIO_DATA: "../data"
+        },
+        message: [
+          "python bench.py"
+        ]
+      }
+    },
+    {
       method: "notify",
       params: {
         html: "Install complete. Click 'Start' to launch FastVideo MLX. Models download on first use."

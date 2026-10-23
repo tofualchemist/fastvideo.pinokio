@@ -403,8 +403,10 @@ Soundscape: [ambient sound], [effects], [music if any].`;
     clearTimeout(estTimer);
     estTimer = setTimeout(async () => {
       try {
-        const e = await api("GET", `/api/estimate?model=${c.model}&quality=${c.quality}&refs=${c.refs.length ? 1 : 0}&duration=${Number(c.duration)}&canvas=${c.canvas}`);
-        btn.textContent = `Generate · ${fmtEta(e.total_s)}${e.learned ? "" : " (guess)"}`;
+        const clips = c.refs.filter((r) => r.media_type === "video").length;
+        const e = await api("GET", `/api/estimate?model=${c.model}&quality=${c.quality}&refs=${c.refs.length}&ref_clips=${clips}&duration=${Number(c.duration)}&canvas=${c.canvas}&fast=${c.draftMode === "fast" || c.draftMode === "both" ? 1 : 0}&fast_spatial=${c.draftMode === "spatial" || c.draftMode === "both" ? 1 : 0}`);
+        if (e.total_s == null) return;
+        btn.textContent = `Generate · ${fmtEta(e.total_s)}${e.basis === "measured" ? "" : " est."}`;
         $("#model-chip-label").textContent = `${spec.name}${spec.audio === false ? " · silent" : ""} · ${fmtEta(e.total_s)}`;
       } catch (_) { /* ignore */ }
     }, 150);
@@ -480,13 +482,13 @@ Soundscape: [ambient sound], [effects], [music if any].`;
     try { data = await api("GET", `/api/picker?quality=${c.quality}&need=${currentNeed()}`); } catch (e) { return toast(e.message, true); }
     const m = data.machine;
     $("#picker-machine").textContent = `This Mac: ${m.chip.replace("Apple ", "")}, ${Math.round(m.memory_gib)} GB, ${Math.round(m.free_disk_gb)} GB free`;
-    $("#picker-note").textContent = m.factor_source === "calibrated" ? "times calibrated from your runs" : "times estimated for this chip";
+    $("#picker-note").textContent = m.note + (m.runs ? ` · ${m.runs} run${m.runs === 1 ? "" : "s"} recorded` : "");
     const list = $("#picker-list"); list.innerHTML = "";
     for (const r of data.models) {
       const facts = [];
       const d = r.est_s.draft, f = r.est_s.final;
-      facts.push(el("span", {}, "draft ", el("b", {}, fmtApprox(d)), r.measured.draft ? " measured" : " est."));
-      facts.push(el("span", {}, "final ", el("b", {}, fmtApprox(f)), r.measured.final ? " measured" : " est."));
+      facts.push(el("span", {}, "draft ", el("b", {}, d == null ? "?" : fmtApprox(d)), r.measured.draft ? " measured" : " est."));
+      facts.push(el("span", {}, "final ", el("b", {}, f == null ? "?" : fmtApprox(f)), r.measured.final ? " measured" : " est."));
       facts.push(el("span", {}, "peak ", el("b", {}, `${Math.round(r.peak_gib)} GB`)));
       if (r.installed) facts.push(el("span", {}, "installed ", el("b", {}, `${r.size_gb} GB`)));
       else facts.push(el("span", {}, "download ", el("b", {}, `${r.download_gb} GB`), r.convert ? `, converts to ${r.disk_gb} GB (one-time, a few minutes)` : ""));

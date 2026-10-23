@@ -78,8 +78,6 @@ class ModelSpec:
     frames_for_seconds: dict = field(default_factory=lambda: {5: 124, 10: 243, 15: 362})
     canvases: dict = field(default_factory=lambda: {"480p": (832, 480), "768p": (1344, 768)})
     peak_gib: float = 20.0      # for the picker; replaced by measurements once available
-    # Reference end-to-end seconds for a 5 s 480p clip on the lab's M4 Max (36 GB): draft and final.
-    ref_s: dict = field(default_factory=lambda: {"draft": 500.0, "final": 925.0})
     output: str = "Video with synced audio · 480p · 5 s at 24 fps"
     extra: dict = field(default_factory=dict)
 
@@ -128,7 +126,6 @@ _add(ModelSpec(
     peak_gib=18.5,
     description="Fastest. Four-step text to video with audio, dense attention. Downloads the 70 GB BF16 "
                 "transformer and converts it to INT6 on this Mac (about 17 GB kept).",
-    ref_s={"draft": 248.0, "final": 465.0},
     output="Video with synced audio · 480p · 5 s at 24 fps · 4 steps",
 ))
 
@@ -158,7 +155,6 @@ _add(ModelSpec(
     peak_gib=20.0,
     description="Higher quality. Eight-step text to video with audio, sparse attention. Downloads the 70 GB BF16 "
                 "transformer and converts it to INT6 on this Mac (about 17 GB kept).",
-    ref_s={"draft": 560.0, "final": 1000.0},
     output="Video with synced audio · 480p · 5 s at 24 fps · 8 steps",
 ))
 
@@ -187,7 +183,6 @@ _add(ModelSpec(
     peak_gib=20.0,
     description="Quickest to set up: the only ready-made INT6 download (15 GB). Experimental pruned model, "
                 "eight steps with audio. Quality below V2.",
-    ref_s={"draft": 500.0, "final": 925.0},
     output="Video with synced audio · 480p · 5 s at 24 fps · pruned H3",
 ))
 
@@ -218,7 +213,6 @@ _add(ModelSpec(
     description="Reference to video with audio: prompt plus ordered image, video and voice references. "
                 "Downloads the 70 GB BF16 transformer and converts it to INT6 on this Mac (about 17 GB kept).",
     default_vsa_impl="auto",
-    ref_s={"draft": 560.0, "final": 2300.0},
     output="Reference image / video / voice → video with audio · 5, 10 or 15 s",
 ))
 
@@ -258,7 +252,6 @@ _add(ModelSpec(
     frames_for_seconds=WAN_FRAMES,
     canvases=WAN_CANVASES,
     peak_gib=4.0,
-    ref_s={"draft": 45.0, "final": 110.0},
     output="Silent video · 480p · 5 s at 16 fps",
 ))
 
@@ -287,7 +280,6 @@ _add(ModelSpec(
     frames_for_seconds=WAN_FRAMES,
     canvases=WAN_CANVASES_HD,
     peak_gib=22.0,
-    ref_s={"draft": 211.0, "final": 602.0},
     output="Silent video · 480p or 720p · 5 s at 16 fps · best Wan quality",
 ))
 
@@ -321,7 +313,6 @@ _add(ModelSpec(
     frames_for_seconds={5: 121},
     canvases={"480p": (832, 448), "720p": (1280, 704)},
     peak_gib=9.5,
-    ref_s={"draft": 47.0, "final": 151.0},
     output="Silent video · 480p or 720p · 5 s at 24 fps",
     extra={"script": "wan22", "self_contained": True},
 ))
@@ -358,7 +349,6 @@ def model_json(spec: ModelSpec) -> dict:
         "fps": spec.fps,
         "canvases": list(spec.canvases.keys()),
         "peak_gib": spec.peak_gib,
-        "ref_s": dict(spec.ref_s),
         "output": spec.output,
         "build": spec.build,
         "steps": spec.steps,
