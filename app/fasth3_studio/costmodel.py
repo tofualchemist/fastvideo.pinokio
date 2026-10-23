@@ -1,19 +1,21 @@
 """Render-time cost model.
 
-A denoise step costs  seconds = s * (F_linear + R * c * F_attention).  The two FLOP counts come from the
-model's architecture and the number of tokens in the sequence (linear projections grow with the token
-count, attention with its square). R is how much more a FLOP of attention costs than a FLOP of matmul on
-this GPU and runtime, and c is the attention kernel's cost for each model relative to dense attention
-(the sparse models use a gather-based kernel that is not cheaper than dense at these sizes). s is one
-machine constant, seconds per matmul FLOP, fitted from every run this machine has done whatever the clip
-length, canvas or reference count, because the token count is recorded with each run; R is refitted too
-once runs at different sequence lengths exist. Before any run, s comes from a GPU micro-benchmark.
-Encode, load, decode and interpolation are recorded per model and scaled by what they depend on.
-There are no per-length, per-canvas or per-chip multipliers anywhere.
+A denoise step costs  seconds = s * (F_linear + R * F_attention).  Both FLOP counts come from the model's
+architecture and the number of tokens in the sequence. F_linear grows with the token count: the projections,
+plus, for the sparse models, the per-token work of their gather-based attention kernel (tile selection,
+K/V gathers, masks), which measured as a fixed amount per token per layer. F_attention grows with the square
+of the token count: the dense attention FLOPs, reduced to the fraction of tiles the trained sparsity keeps.
+R is how much more an attention FLOP costs than a matmul FLOP on this GPU and runtime. s is one machine
+constant, seconds per matmul FLOP, fitted from every run this machine has done whatever the clip length,
+canvas or reference count, because the token count is recorded with each run; R is refitted too once runs
+at different sequence lengths exist. Before any run, s comes from a GPU micro-benchmark. Encode, load,
+decode and interpolation are recorded per model and scaled by what they depend on. There are no per-length,
+per-canvas or per-chip multipliers anywhere.
 
-Calibration (M1 Max, Oct 2026, nine FastH3 runs from 9k to 24k tokens): the projections ran at the
-micro-benchmark's bf16 matmul rate (7.9 vs 7.7 TFLOPS), attention at 1/5.1 of it; V2's kernel cost 1.34x
-dense, Trim's 1.6x, Omni's 0.76x.
+Calibration (M1 Max, Oct 2026, ten FastH3 runs from 9k to 24k tokens): the projections ran at the
+micro-benchmark's bf16 matmul rate (7.9 vs 7.7 TFLOPS); dense attention (V1, 9k and 24k tokens) at 1/5.1 of
+it; the sparse kernel's quadratic part matched its kept fraction of tiles (Trim, 9k vs 24k tokens) and its
+per-token part came out at 1.15 GFLOP-equivalents per token per layer on V2 and Omni, 1.35 on Trim.
 """
 from __future__ import annotations
 
@@ -25,18 +27,19 @@ import threading
 import time
 from pathlib import Path
 
-# Architecture per model id. attn = the model's attention kernel cost relative to dense attention
-# (measured; V1 is dense). spatial = pixels per token side (VAE spatial compression x patch size).
-# text = tokens that ride along in the DiT sequence (H3 puts the prompt in the sequence; Wan uses
-# cross-attention).
+# Architecture per model id. keep = fraction of attention the trained sparsity leaves (1 = dense);
+# sparse_gflop = measured per-token, per-layer cost of the sparse kernel's gathers and selection, in
+# matmul-FLOP equivalents (0 for dense attention). spatial = pixels per token side (VAE spatial compression
+# x patch size). text = tokens that ride along in the DiT sequence (H3 puts the prompt in the sequence; Wan
+# uses cross-attention).
 ARCH = {
-    "fasth3-v1":      dict(hidden=5376, ffn=14336, layers=50, attn=1.00, spatial=32, text=100, engine="h3"),
-    "fasth3-v2":      dict(hidden=5376, ffn=14336, layers=50, attn=1.34, spatial=32, text=100, engine="h3"),
-    "fasth3-trim":    dict(hidden=5376, ffn=14336, layers=42, attn=1.60, spatial=32, text=100, engine="h3"),
-    "fasth3-omni":    dict(hidden=5376, ffn=14336, layers=50, attn=0.76, spatial=32, text=100, engine="h3"),
-    "fastmetal-1.3b": dict(hidden=1536, ffn=8960,  layers=30, attn=1.00, spatial=16, text=0,   engine="wan"),
-    "fastmetal-5b":   dict(hidden=3072, ffn=14336, layers=30, attn=1.00, spatial=32, text=0,   engine="wan"),
-    "fastmetal-14b":  dict(hidden=5120, ffn=13824, layers=40, attn=1.00, spatial=16, text=0,   engine="wan"),
+    "fasth3-v1":      dict(hidden=5376, ffn=14336, layers=50, keep=1.0, sparse_gflop=0.0,  spatial=32, text=100, engine="h3"),
+    "fasth3-v2":      dict(hidden=5376, ffn=14336, layers=50, keep=0.2, sparse_gflop=1.15, spatial=32, text=100, engine="h3"),
+    "fasth3-trim":    dict(hidden=5376, ffn=14336, layers=42, keep=0.2, sparse_gflop=1.35, spatial=32, text=100, engine="h3"),
+    "fasth3-omni":    dict(hidden=5376, ffn=14336, layers=50, keep=0.1, sparse_gflop=1.15, spatial=32, text=100, engine="h3"),
+    "fastmetal-1.3b": dict(hidden=1536, ffn=8960,  layers=30, keep=1.0, sparse_gflop=0.0,  spatial=16, text=0,   engine="wan"),
+    "fastmetal-5b":   dict(hidden=3072, ffn=14336, layers=30, keep=1.0, sparse_gflop=0.0,  spatial=32, text=0,   engine="wan"),
+    "fastmetal-14b":  dict(hidden=5120, ffn=13824, layers=40, keep=1.0, sparse_gflop=0.0,  spatial=16, text=0,   engine="wan"),
 }
 
 # Priors used until this machine's own runs replace them. BENCH_EFFICIENCY: fraction of the
@@ -128,10 +131,11 @@ def tokens_for(model_id: str, frames_denoised: int, width: int, height: int, *, 
 
 
 def flops_per_step(model_id: str, tokens: int) -> tuple[float, float]:
-    """(linear FLOPs, dense-equivalent attention FLOPs x this model's kernel cost) for one denoise step."""
+    """(per-token FLOPs, attention FLOPs) for one denoise step: the first grows with the token count, the
+    second with its square."""
     a = ARCH[model_id]
-    linear = 2.0 * (4 * a["hidden"] ** 2 + 2 * a["hidden"] * a["ffn"]) * a["layers"] * tokens
-    attention = 4.0 * a["hidden"] * a["layers"] * tokens * tokens * a["attn"]
+    linear = (2.0 * (4 * a["hidden"] ** 2 + 2 * a["hidden"] * a["ffn"]) + a["sparse_gflop"] * 1e9) * a["layers"] * tokens
+    attention = 4.0 * a["hidden"] * a["layers"] * a["keep"] * tokens * tokens
     return linear, attention
 
 
