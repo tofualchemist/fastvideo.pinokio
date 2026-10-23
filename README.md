@@ -70,11 +70,12 @@ visual description. "Insert template" gives you a skeleton for whichever model i
 
 ## Memory while rendering
 
-FastH3 pins ("wires") GPU memory so macOS cannot page the model out mid-step. The launcher pins what
-the job needs plus 8 GiB of headroom (about 28 GiB for a 5 s 480p clip on a 64 GB Mac), computed from
-the model's measured peak and the clip's size, instead of FastVideo's benchmark default of two thirds
-of RAM. That leaves the rest for your other apps. Larger canvases and longer clips scale the figure up
-toward the benchmark value. Set an explicit value in Settings to override it.
+FastH3 pins ("wires") GPU memory so macOS cannot page the model out mid-step. The launcher uses
+FastVideo's recipe: about two thirds of unified memory (42 GiB on a 64 GB Mac, 24 on 36 GB), never more
+than the working set Metal recommends for the device. Pinning less was tried and reverted: renders that
+got less than this (28 to 34 GiB on a 64 GB Mac) were killed by macOS's GPU watchdog mid-step, because
+memory above the limit can be paged while a kernel runs. Set an explicit value in Settings to override
+it; "off" disables wiring.
 
 Rendering still keeps the GPU at 100 %, and macOS shares that GPU with the display, so expect some
 UI stutter while a clip renders; that part is not something the launcher can change.

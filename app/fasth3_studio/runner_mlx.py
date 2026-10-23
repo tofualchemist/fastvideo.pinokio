@@ -72,12 +72,13 @@ class ProtocolLogHandler(logging.Handler):
 
 
 def auto_wired_limit_gib() -> float:
-    try:
-        import subprocess
-        mem = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip()) / 2**30
-    except Exception:  # noqa: BLE001
-        mem = 32.0
-    return min(64.0, round(mem * 0.66, 1))
+    """FastVideo's recipe: wire about two thirds of unified memory (42 GiB on 64 GB, 24 on 36 GB), never more
+    than the working set Metal itself recommends for this device."""
+    import mlx.core as mx
+    info = mx.device_info()
+    mem = int(info["memory_size"]) / 2**30
+    recommended = int(info["max_recommended_working_set_size"]) / 2**30
+    return round(min(mem * 0.66, recommended), 1)
 
 
 def attach_everywhere(handler: logging.Handler) -> None:

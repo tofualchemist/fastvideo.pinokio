@@ -286,31 +286,19 @@ class JobQueue:
             params["vsa_tile_size"] = spec.vsa_tile_size
         return self._execute(pid, tid, turn, spec, load, params, clip)
 
-    H3_WEIGHTS_GIB = 17.0   # INT6 DiT; the part of the peak that does not scale with the job
 
     def _wired_limit(self, spec, turn: dict, settings: dict):
-        """Pin what this job needs plus headroom, not two thirds of RAM.
+        """An explicit value in Settings wins; otherwise the runner applies FastVideo's recipe (two thirds of RAM).
 
-        The lab's benchmark default (0.66 x RAM, up to 64 GiB) wires far more than a 5 s clip uses and
-        pushes every other app into swap. An explicit value in Settings wins; 'resident' mode keeps the
-        lab formula because it needs all components pinned. Untested shapes (768p, 10/15 s) scale the
-        activation part up and end at the lab ceiling, so they can never get less than before.
+        A per-job estimate (weights + scaled activations + headroom) was tried in Oct 2026 and reverted: every
+        render it pinned less for (28-34 GiB on a 64 GB Mac) died in macOS's GPU watchdog, while the same shapes
+        rendered at the recipe value. Memory above the wired limit can be paged mid-kernel, and a paging kernel
+        runs long enough to be killed as "Impacting Interactivity".
         """
         explicit = settings.get("metal_wired_limit_gib", "auto")
         if explicit not in (None, "", "auto"):
             return explicit
-        if settings.get("resident"):
-            return "auto"
-        from .models import machine_memory_gib
-        ram = machine_memory_gib()
-        # Three quarters of RAM, capped at 64: on a 36 GB Mac that is 27 GiB, the lab's own recipe value.
-        ceiling = min(64.0, round(ram * 0.75, 1))
-        base_peak = max(float(spec.peak_gib or 20.0), float(self.costs.peak_for(spec.id) or 0.0))
-        activations = max(2.0, base_peak - self.H3_WEIGHTS_GIB)
-        pixel_scale = (turn["width"] * turn["height"]) / (832 * 480)
-        frame_scale = turn["num_frames"] / 124
-        wired = self.H3_WEIGHTS_GIB + activations * pixel_scale * frame_scale + 8.0
-        return round(min(ceiling, max(24.0, wired)), 1)
+        return "auto"
 
     def _execute(self, pid: str, tid: str, turn: dict, spec, load: dict, params: dict, clip: Path) -> None:
         wired = load.get("metal_wired_limit_gib")

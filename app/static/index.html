@@ -107,7 +107,7 @@
       <div class="modal-head"><h2>Settings</h2><button class="icon-btn close" data-close aria-label="Close">&#x2715;</button></div>
       <form id="settings-form" class="settings">
         <label>Default model <select name="default_model" id="settings-model"></select></label>
-        <label>Wired memory limit (GiB; auto = what the job needs + 8 GiB, so other apps keep their RAM) <input name="metal_wired_limit_gib" placeholder="auto"></label>
+        <label>Wired memory limit (GiB; auto = two thirds of RAM, FastVideo's recipe) <input name="metal_wired_limit_gib" placeholder="auto"></label>
         <label>MLX cache limit (GiB) <input name="mlx_cache_limit_gib" type="number" min="-1" step="1"></label>
         <label>VAE dtype <select name="vae_dtype"><option>bf16</option><option>fp16</option><option>fp32</option></select></label>
         <label>Quantized matmul <select name="quant_gemm"><option>auto</option><option>dequant</option><option>qmm</option></select></label>
